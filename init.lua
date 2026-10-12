@@ -672,7 +672,9 @@ end
 
 local function ballCreate()
   if ball.canvas then return end
-  loadBallState()
+  -- 注意：不要在这里 loadBallState()。那样读盘发生在"是否显示"的判断之后，
+  -- 结果是"上次明明隐藏了、这次照样建出来并显示"（实测踩过）。
+  -- 状态必须在 ballApply 判断之前就读好。
   local scr = hs.screen.mainScreen():frame()
   local x = ball.x or (scr.x + scr.w - ball.w - 24)
   local y = ball.y or (scr.y + math.floor(scr.h * 0.35))
@@ -740,10 +742,12 @@ do
       "，延迟 " .. CONFIG.autoResume.delay .. "s；⌥⌘S 开关，⌥⌘T 手动试一次）")
 end
 
--- 悬浮球
+-- 悬浮球：必须先读盘再判断显隐，否则"上次隐藏了"会被无视
 do
+  pcall(loadBallState)
   local okBall, errBall = pcall(ballApply)
   if not okBall then log("[ball] 创建失败：" .. tostring(errBall)) end
+  log("[ball] 显隐状态已恢复：显示=" .. tostring(ball.visible))
 end
 
 -- 麦克风设备预热：首次解析要 400+ms，放在启动阶段吃掉，别让它落在输入路径上
