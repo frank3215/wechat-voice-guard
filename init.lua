@@ -48,6 +48,8 @@ local CONFIG = {
     maxHoldSec = 90,        -- hold 模式的安全释放超时（秒），防止 fn 被永久按住
     minGap     = 2.0,       -- 两次续上之间最小间隔（秒）
     maxChain   = 100,       -- 连续续上的硬上限（0 = 不限），防呆用
+    emptyEndResume = true,  -- 空转写结束（无文字）也续上：靠麦克风占用释放来判定
+    minSessionSec  = 1.0,   -- 语音会话短于此秒数不算数（防别的应用一闪而过）
   },
 
   -- ── 桌面悬浮球（hs.canvas 原生绘制：不额外起进程、不轮询）────────────────
@@ -312,12 +314,69 @@ local function toggleAutoResume()
 end
 
 --------------------------------------------------------------------------------
+-- 第二个触发器：麦克风占用释放（覆盖"空的结束"）
+--
+-- 微信语音输入期间，默认输入设备一直处于「被占用」状态
+-- （CoreAudio kAudioDevicePropertyDeviceIsRunningSomewhere）。它释放 = 会话结束。
+-- 这样即使这次一个字都没识别出来（微信不会发任何事件），我们也能知道该续上。
+--
+-- 每 0.5s 读一次是**纯本地 CoreAudio 状态查询**，不与其他进程做 IPC，
+-- 不会像 v1 的 AX 轮询那样拖慢输入。
+--------------------------------------------------------------------------------
+
+local mic = { on = nil, startedAt = 0, hadText = false, timer = nil, dev = nil, devTick = 0 }
+
+-- 设备对象必须缓存：首次解析默认输入设备实测要 400+ms，主线程阻塞就是输入卡顿
+local function micDevice(refresh)
+  if refresh or not mic.dev then
+    mic.dev = (hs.audiodevice and hs.audiodevice.defaultInputDevice)
+      and hs.audiodevice.defaultInputDevice() or nil
+  end
+  return mic.dev
+end
+
+local function micTick()
+  mic.devTick = mic.devTick + 1
+  local dev = micDevice(mic.devTick % 60 == 1)   -- 约每 30s 重解析一次，平时只读状态
+  if not dev then return end
+  local inUse = dev:inUse()
+  if inUse == nil then
+    micDevice(true)
+    return
+  end
+  if mic.on == nil then mic.on = inUse; return end       -- 首次只记基线
+  if inUse == mic.on then return end
+
+  mic.on = inUse
+  local now = hs.timer.secondsSinceEpoch()
+  if inUse then
+    mic.startedAt, mic.hadText = now, false
+    log("[mic] 输入设备开始被占用（语音会话开始）")
+  else
+    local dur = now - (mic.startedAt or now)
+    log(string.format("[mic] 输入设备释放（会话 %.1fs，本次%s文本）", dur, mic.hadText and "有" or "无"))
+    if resume.enabled and CONFIG.autoResume.emptyEndResume
+       and not mic.hadText and dur >= CONFIG.autoResume.minSessionSec then
+      if mic.timer then mic.timer:stop() end
+      mic.timer = hs.timer.doAfter(CONFIG.autoResume.delay, function()
+        if mic.hadText then
+          log("[mic] 期间产生了文本，改由文本路径续上，跳过空转续上")
+          return
+        end
+        doResume("空转写结束（无文字）")
+      end)
+    end
+  end
+end
+
+--------------------------------------------------------------------------------
 -- 微信注入事件到达后的重活，全部在这里做（已离开事件回调）
 --------------------------------------------------------------------------------
 
 local function handleInjection(s, code, flags, pid)
   -- 本次转写结束：hold 模式在这里松手，随后再按下一轮
   releaseHeld("转写结束")
+  mic.hadText = true      -- 告诉麦克风路径：这次有文字，别重复续上
 
   local flagStr = {}
   for k in pairs(flags or {}) do flagStr[#flagStr + 1] = k end
@@ -556,9 +615,13 @@ local function ballMouse(canvas, msg)
   elseif msg == "mouseUp" then
     pcall(function() canvas:canvasMouseEvents(true, true, false, false) end)
     local now = hs.timer.secondsSinceEpoch()
-    local debounce = ball.lastUp and (now - ball.lastUp) < 0.25
+    local since = ball.lastUp and (now - ball.lastUp) or 999
     ball.lastUp = now
-    if ball.drag and not ball.moved and not debounce then
+    local debounced = since < 0.6
+    -- 把每次 mouseUp 都记下来：曾经出现过"一次点击翻转两次"，靠这行才能定位
+    log(string.format("[ball] mouseUp drag=%s moved=%s 距上次=%.2fs%s",
+        tostring(ball.drag ~= nil), tostring(ball.moved), since, debounced and " → 去抖忽略" or ""))
+    if ball.drag and not ball.moved and not debounced then
       -- 点击：⌥+点击 = 切拦截模式；普通点击 = 切自动续上
       local mods = hs.eventtap.checkKeyboardModifiers() or {}
       if mods.alt then toggleIntercept() else toggleAutoResume() end
@@ -649,6 +712,9 @@ do
   if not okBall then log("[ball] 创建失败：" .. tostring(errBall)) end
 end
 
+-- 麦克风设备预热：首次解析要 400+ms，放在启动阶段吃掉，别让它落在输入路径上
+pcall(function() withPerf("micDevice:预热", micDevice, true) end)
+
 local okTap, errTap = pcall(startEventTap)
 if not okTap then log("[tap] 启动失败：" .. tostring(errTap)) end
 
@@ -658,6 +724,7 @@ lastPBChange = hs.pasteboard.changeCount()
 local timers = {}
 timers.pid = hs.timer.doEvery(CONFIG.pidRefresh, function() withPerf("refreshWeChatPIDs", refreshWeChatPIDs) end)
 timers.pb  = hs.timer.doEvery(CONFIG.pbPoll, function() withPerf("pollPasteboard", pollPasteboard, "pasteboard") end)
+timers.mic = hs.timer.doEvery(0.5, function() withPerf("micTick", micTick) end)
 
 local lastKey, lastWx = 0, 0
 timers.hb = hs.timer.doEvery(60, function()
@@ -678,6 +745,7 @@ local mod = {
   toggleAutoResume = toggleAutoResume,
   resumeNow = function() doResume("手动测试", true) end,
   resumeState = resume,
+  mic = mic,
   ball = ball,
   ballToggleVisible = ballToggleVisible,
   ballApply = ballApply,

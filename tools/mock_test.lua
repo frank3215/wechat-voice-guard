@@ -21,6 +21,9 @@ hs = {
     find = function() return nil end,
   },
   notify = { new = function() return { send = function() end } end },
+  audiodevice = {
+    defaultInputDevice = function() return { inUse = function() return false end } end,
+  },
   screen = {
     mainScreen = function()
       return { frame = function() return { x = 0, y = 0, w = 1440, h = 900 } end }
