@@ -121,8 +121,7 @@ local function capture(text, source)
 
   local nowEp = hs.timer.secondsSinceEpoch()
   local sameSession = (nowEp - (state.lastCaptureAt or 0)) <= CONFIG.mergeWindow
-  -- 同一会话内的重复才丢；隔了很久的一句同样的话（比如你接连两次说"在某种意义上讲"）
-  -- 必须算新的一条，不能被去重吃掉
+  -- 同一会话内的重复才丢；隔了很久又说了一遍同一句话时，必须算新的一条，不能被去重吃掉
   if text == state.lastText and sameSession then return end
 
   local now = os.date("%Y-%m-%d %H:%M:%S")

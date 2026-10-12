@@ -27,7 +27,7 @@ macOS + [Hammerspoon](https://www.hammerspoon.org/)。适用于微信 4.1.8+ 的
 
 ```
 19:26:12  pid=2985(微信) keycode=0 flags=[] unicode='<整段识别结果，实测 636 字>' focused=?|
-19:28:58  pid=2985(微信) keycode=0 flags=[] unicode='在某种意义上讲'            focused=?|
+19:28:58  pid=2985(微信) keycode=0 flags=[] unicode='<同一轮的短句，实测 7 字>'      focused=?|
 ```
 
 - `keycode=0` + 整段文字作为 unicode 串 = `CGEventKeyboardSetUnicodeString` 的标准用法
