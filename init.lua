@@ -34,6 +34,21 @@ local CONFIG = {
   hotWindow     = 8.0,     -- 语音会话结束后 N 秒内视为"热"，才采信剪贴板变化
   perfWarnMs    = 50,      -- 任何一步超过这个耗时就打 [perf] 日志
   followUpDelays = { 0.05, 0.12, 0.3, 0.6, 1.2 },  -- 微信事件后追读剪贴板的时点（秒）
+
+  -- ── 可选功能：转写停止后自动"续上"语音输入 ──────────────────────────────
+  -- 微信长时间静音会自动停止听写；开启后，每次转写结束（捕获到一次微信注入事件）
+  -- 就自动补按一次快捷键，把听写重新接上。默认关闭，用 ⌥⌘S 开关（状态存盘）。
+  autoResume = {
+    enabled    = false,
+    combo      = { mods = { "ctrl" }, key = "fn" },  -- 默认 control+fn
+    strategy   = "flags",   -- "flags"（官方推荐的修饰键写法）| "key"（keyDown/keyUp）| "both"
+    mode       = "tap",     -- "tap"：轻点一下 | "hold"：按住，直到下次转写结束才放
+    delay      = 0.8,       -- 转写结束后等多久再续（秒）
+    holdMs     = 80,        -- tap 模式按下多久（毫秒）
+    maxHoldSec = 90,        -- hold 模式的安全释放超时（秒），防止 fn 被永久按住
+    minGap     = 2.0,       -- 两次续上之间最小间隔（秒）
+    maxChain   = 100,       -- 连续续上的硬上限（0 = 不限），防呆用
+  },
 }
 
 local LOG_FILE   = CONFIG.outDir .. "/capture.log"
@@ -172,8 +187,128 @@ local function pollPasteboard(source, force)
   return v
 end
 
+--------------------------------------------------------------------------------
+-- 可选功能：转写停止后自动"续上"（⌥⌘S 开关，默认关）
+--
+-- 实现要点：fn 是**修饰键**，光发 keyDown/keyUp 很多应用收不到；官方推荐做法是
+-- 发 flagsChanged 事件（newEvent + setType + setKeyCode + setFlags + post）。
+-- 所以 strategy 默认 "flags"，保留 "key"/"both" 供实测不通时切换。
+--------------------------------------------------------------------------------
+
+local FN_CODE = (hs.keycodes.map and hs.keycodes.map.fn) or 63
+local RESUME_FLAG_FILE = CONFIG.outDir .. "/autoresume.state"
+
+local resume = { enabled = false, chain = 0, lastAt = 0, held = false, holdTimer = nil }
+
+local function resumeName()
+  local c = CONFIG.autoResume.combo
+  local mods = c.mods or {}
+  if #mods == 0 then return c.key end
+  return table.concat(mods, "+") .. "+" .. c.key
+end
+
+local function comboFlags()
+  local t = {}
+  for _, m in ipairs(CONFIG.autoResume.combo.mods or {}) do t[m] = true end
+  t[CONFIG.autoResume.combo.key] = true
+  return t
+end
+
+local function postFlagsChanged(flags)
+  local e = hs.eventtap.event.newEvent()
+  e:setType(hs.eventtap.event.types.flagsChanged)
+  e:setKeyCode(FN_CODE)
+  e:setFlags(flags)
+  e:post()
+end
+
+local function postKeyEvent(down)
+  local e = hs.eventtap.event.newKeyEvent({}, FN_CODE, down)
+  e:setFlags(down and comboFlags() or {})
+  e:post()
+end
+
+local function pressResumeKey()
+  local st = CONFIG.autoResume.strategy
+  if st == "flags" or st == "both" then postFlagsChanged(comboFlags()) end
+  if st == "key"   or st == "both" then postKeyEvent(true) end
+end
+
+local function releaseResumeKey()
+  local st = CONFIG.autoResume.strategy
+  if st == "flags" or st == "both" then postFlagsChanged({}) end
+  if st == "key"   or st == "both" then postKeyEvent(false) end
+end
+
+local function releaseHeld(why)
+  if resume.holdTimer then resume.holdTimer:stop(); resume.holdTimer = nil end
+  if resume.held then
+    resume.held = false
+    releaseResumeKey()
+    log("[resume] 释放 " .. resumeName() .. (why and ("（" .. why .. "）") or ""))
+  end
+end
+
+local function saveResumeFlag()
+  local f = io.open(RESUME_FLAG_FILE, "w")
+  if f then f:write(resume.enabled and "1" or "0"); f:close() end
+end
+
+-- manual = ⌥⌘T 手动测试：忽略开关、间隔与上限（用来先确认键位对不对）
+local function doResume(why, manual)
+  if not resume.enabled and not manual then return end
+  if manual then releaseHeld("手动触发前先松开") end
+
+  local now = hs.timer.secondsSinceEpoch()
+  if not manual then
+    if (now - resume.lastAt) < CONFIG.autoResume.minGap then
+      log("[resume] 距上次续上不足 " .. CONFIG.autoResume.minGap .. "s，跳过")
+      return
+    end
+    if CONFIG.autoResume.maxChain > 0 and resume.chain >= CONFIG.autoResume.maxChain then
+      resume.enabled = false
+      saveResumeFlag()
+      log("[resume] 连续续上达上限 " .. CONFIG.autoResume.maxChain .. " 次，已自动关闭")
+      notify("Voice Guard", "自动续上达上限，已关闭")
+      return
+    end
+    resume.chain = resume.chain + 1
+  end
+  resume.lastAt = now
+
+  if CONFIG.autoResume.mode == "hold" then
+    pressResumeKey()
+    resume.held = true
+    resume.holdTimer = hs.timer.doAfter(CONFIG.autoResume.maxHoldSec, function()
+      releaseHeld("按住超时安全释放")
+    end)
+    log(string.format("[resume] 按住 %s（%s；等下次转写结束再放）", resumeName(), why))
+  else
+    pressResumeKey()
+    hs.timer.doAfter(CONFIG.autoResume.holdMs / 1000, releaseResumeKey)
+    log(string.format("[resume] 轻点 %s（%s）", resumeName(), why))
+  end
+end
+
+local function toggleAutoResume()
+  resume.enabled = not resume.enabled
+  if not resume.enabled then releaseHeld("关闭功能") end
+  resume.chain = 0
+  saveResumeFlag()
+  log("[resume] 自动续上 = " .. tostring(resume.enabled) ..
+      (resume.enabled and ("（" .. resumeName() .. "，模式 " .. CONFIG.autoResume.mode ..
+                          "，策略 " .. CONFIG.autoResume.strategy .. "）") or ""))
+  notify("Voice Guard", resume.enabled and ("自动续上：开（" .. resumeName() .. "）") or "自动续上：关")
+end
+
+--------------------------------------------------------------------------------
 -- 微信注入事件到达后的重活，全部在这里做（已离开事件回调）
+--------------------------------------------------------------------------------
+
 local function handleInjection(s, code, flags, pid)
+  -- 本次转写结束：hold 模式在这里松手，随后再按下一轮
+  releaseHeld("转写结束")
+
   local flagStr = {}
   for k in pairs(flags or {}) do flagStr[#flagStr + 1] = k end
   table.sort(flagStr)
@@ -190,6 +325,11 @@ local function handleInjection(s, code, flags, pid)
 
   if type(s) == "string" and s ~= "" then
     capture(s, "eventtap")
+  end
+
+  -- 可选：续上听写
+  if resume.enabled then
+    hs.timer.doAfter(CONFIG.autoResume.delay, function() doResume("转写结束") end)
   end
 end
 
@@ -322,6 +462,8 @@ end
 hs.hotkey.bind({ "alt", "cmd" }, "c", copyLast)
 hs.hotkey.bind({ "alt", "cmd" }, "v", snapshotFocused)
 hs.hotkey.bind({ "alt", "cmd" }, "i", toggleIntercept)
+hs.hotkey.bind({ "alt", "cmd" }, "s", toggleAutoResume)                        -- 自动续上开关
+hs.hotkey.bind({ "alt", "cmd" }, "t", function() doResume("手动测试", true) end) -- 手动试一次键位
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "d", function() dumpTree("manual") end)
 hs.hotkey.bind({ "alt", "cmd" }, "l", function() hs.open(LOG_FILE) end)
 
@@ -329,6 +471,21 @@ log("=== WeChat Voice Guard v2 启动 ===")
 refreshWeChatPIDs()
 log("[pid] 微信进程 " .. (function() local n = 0; for _ in pairs(wxPidSet) do n = n + 1 end; return n end)() ..
     " 个（由定时器维护，事件回调只查表）")
+
+-- 自动续上：回读开关状态；并先清一次可能残留的修饰键（上次 hold 中途被重载会卡住 fn）
+do
+  local f = io.open(RESUME_FLAG_FILE, "r")
+  if f then
+    local s = f:read("*a") or ""
+    f:close()
+    resume.enabled = s:find("1") ~= nil
+  end
+  pcall(releaseResumeKey)   -- 清残留
+  log("[resume] 自动续上 = " .. tostring(resume.enabled) ..
+      "（" .. resumeName() .. "，模式 " .. CONFIG.autoResume.mode ..
+      "，策略 " .. CONFIG.autoResume.strategy ..
+      "，延迟 " .. CONFIG.autoResume.delay .. "s；⌥⌘S 开关，⌥⌘T 手动试一次）")
+end
 
 local okTap, errTap = pcall(startEventTap)
 if not okTap then log("[tap] 启动失败：" .. tostring(errTap)) end
@@ -356,6 +513,9 @@ local mod = {
   refreshPIDs = refreshWeChatPIDs,
   snapshot = snapshotFocused,
   toggle = toggleIntercept,
+  toggleAutoResume = toggleAutoResume,
+  resumeNow = function() doResume("手动测试", true) end,
+  resumeState = resume,
   state = state,
   timers = timers,
   eventtap = eventtap,

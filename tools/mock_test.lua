@@ -8,6 +8,7 @@ local function rec(name)
 end
 
 hs = {
+  keycodes = { map = { fn = 63, ctrl = 59, cmd = 55, alt = 58, shift = 56 } },
   timer = {
     secondsSinceEpoch = function() return 0 end,
     doEvery = function() return { stop = function() end } end,
@@ -52,8 +53,22 @@ hs = {
       }
     end,
     event = {
-      types = { keyDown = 10, tapDisabledByTimeout = -2, tapDisabledByUserInput = -1 },
+      types = { keyDown = 10, flagsChanged = 12, tapDisabledByTimeout = -2, tapDisabledByUserInput = -1 },
       properties = { eventSourceUnixProcessID = 1 },
+      newEvent = function()
+        local e = {}
+        e.setType = function() return e end
+        e.setKeyCode = function() return e end
+        e.setFlags = function() return e end
+        e.post = function() calls[#calls + 1] = "event.post"; return true end
+        return e
+      end,
+      newKeyEvent = function()
+        local e = {}
+        e.setFlags = function() return e end
+        e.post = function() calls[#calls + 1] = "keyevent.post"; return true end
+        return e
+      end,
     },
   },
 }
@@ -75,7 +90,8 @@ end
 print("SYNTAX + LOAD OK")
 
 -- 顶层返回值检查（v2 的导出面）
-for _, k in ipairs({ "dump", "pollPasteboard", "refreshPIDs", "snapshot", "toggle", "state", "counters" }) do
+for _, k in ipairs({ "dump", "pollPasteboard", "refreshPIDs", "snapshot", "toggle",
+                     "toggleAutoResume", "resumeNow", "state", "counters" }) do
   if mod[k] == nil then print("MISSING EXPORT: " .. k); os.exit(1) end
 end
 print("EXPORTS OK")
@@ -87,8 +103,16 @@ local ok3, err3 = pcall(mod.toggle)
 print("toggle(): " .. (ok3 and "OK" or ("ERROR " .. tostring(err3))))
 local ok4, err4 = pcall(mod.refreshPIDs)
 print("refreshPIDs(): " .. (ok4 and "OK" or ("ERROR " .. tostring(err4))))
+
+-- 自动续上：开关 + 手动触发一次（真实发键，mock 下只记调用）
+local ok5, err5 = pcall(mod.toggleAutoResume)
+print("toggleAutoResume(): " .. (ok5 and "OK" or ("ERROR " .. tostring(err5))))
+local ok6, err6 = pcall(mod.resumeNow)
+print("resumeNow(): " .. (ok6 and "OK" or ("ERROR " .. tostring(err6))))
+print("resume.enabled = " .. tostring(mod.resumeState.enabled))
+
 local c = mod.counters()
 print(string.format("counters: key=%s wx=%s tapDisabled=%s", tostring(c.key), tostring(c.wx), tostring(c.tapDisabled)))
 
 print("HOTKEYS BOUND: " .. tostring(#calls))
-os.exit((ok2 and ok3 and ok4) and 0 or 1)
+os.exit((ok2 and ok3 and ok4 and ok5 and ok6) and 0 or 1)
