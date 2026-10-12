@@ -1,0 +1,20 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lua-load-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      # mock_test.lua 用假的 hs API 加载 init.lua，能抓出语法错误与顶层运行时错误，
+      # 不需要 macOS、也不需要任何权限，所以能在 Linux runner 上跑。
+      - name: 语法与加载自检
+        run: LUA=lua5.4 ./tools/run_mock.sh

@@ -1,5 +1,7 @@
 # WeChat Voice Guard · 微信语音输入防丢字
 
+![lint](https://github.com/frank3215/wechat-voice-guard/actions/workflows/lint.yml/badge.svg)
+
 **在微信电脑版「语音输入」报「输入失败」、识别结果即将消失的那一刻，把文字截下来。**
 
 macOS + [Hammerspoon](https://www.hammerspoon.org/)。适用于微信 4.1.8+ 的「按住 `fn` 说话」全局语音输入。
