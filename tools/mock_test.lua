@@ -21,6 +21,25 @@ hs = {
     find = function() return nil end,
   },
   notify = { new = function() return { send = function() end } end },
+  screen = {
+    mainScreen = function()
+      return { frame = function() return { x = 0, y = 0, w = 1440, h = 900 } end }
+    end,
+  },
+  mouse = { absolutePosition = function() return { x = 10, y = 10 } end },
+  canvas = {
+    windowLevels = { floating = 3, desktopIcon = -2147483623 },
+    new = function()
+      local c = {}
+      local function chain() return c end
+      for _, m in ipairs({ "level", "behaviorAsLabels", "clickActivating", "canvasMouseEvents",
+                           "mouseCallback", "replaceElements", "show", "hide", "delete" }) do
+        c[m] = chain
+      end
+      c.frame = function() return { x = 0, y = 0, w = 56, h = 56 } end
+      return c
+    end,
+  },
   pasteboard = {
     setContents = function() pbCount = pbCount + 1; return true end,
     getContents = function() return "" end,
@@ -45,6 +64,7 @@ hs = {
     },
   },
   eventtap = {
+    checkKeyboardModifiers = function() return {} end,
     new = function()
       return {
         start = rec("tap.start"),

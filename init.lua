@@ -49,6 +49,12 @@ local CONFIG = {
     minGap     = 2.0,       -- 两次续上之间最小间隔（秒）
     maxChain   = 100,       -- 连续续上的硬上限（0 = 不限），防呆用
   },
+
+  -- ── 桌面悬浮球（hs.canvas 原生绘制：不额外起进程、不轮询）────────────────
+  ball = {
+    enabled = true,   -- 默认显示；⌥⌘B 隐藏/显示，显隐与位置都存盘
+    size    = 56,     -- 直径（点）
+  },
 }
 
 local LOG_FILE   = CONFIG.outDir .. "/capture.log"
@@ -57,6 +63,8 @@ local TREE_FILE  = CONFIG.outDir .. "/ax-tree.txt"
 local STATE_FILE = CONFIG.outDir .. "/state.json"
 
 local state = { intercept = CONFIG.interceptMode, history = {}, lastText = "", lastCaptureAt = 0 }
+-- 悬浮球模块在后面才定义；capture()/开关函数通过这两个前向钩子通知它重绘
+local ballFlash, ballRedraw = nil, nil
 local wxPidSet = {}          -- 只由定时器维护；事件回调里只读
 local lastWxEventAt = 0
 local voiceHotAt = 0
@@ -168,6 +176,7 @@ local function capture(text, source)
   end
   log(string.format("[%s]%s %s", source, merged and " (合并)" or "", text:gsub("\n", "\\n")))
   persist()
+  if ballFlash then pcall(ballFlash) end   -- 悬浮球闪一下，给个"截到了"的反馈
   notify("语音已截获 (" .. source .. ")", text:sub(1, 120))
 end
 
@@ -299,6 +308,7 @@ local function toggleAutoResume()
       (resume.enabled and ("（" .. resumeName() .. "，模式 " .. CONFIG.autoResume.mode ..
                           "，策略 " .. CONFIG.autoResume.strategy .. "）") or ""))
   notify("Voice Guard", resume.enabled and ("自动续上：开（" .. resumeName() .. "）") or "自动续上：关")
+  if ballRedraw then pcall(ballRedraw) end
 end
 
 --------------------------------------------------------------------------------
@@ -453,6 +463,151 @@ local function toggleIntercept()
   state.intercept = not state.intercept
   log("[mode] intercept=" .. tostring(state.intercept))
   notify("Voice Guard", state.intercept and "拦截模式：开（只进剪贴板不上屏）" or "拦截模式：关（正常上屏 + 备份）")
+  if ballRedraw then pcall(ballRedraw) end
+end
+
+--------------------------------------------------------------------------------
+-- 桌面悬浮球：⌥⌘B 显隐 / 左键点它切「自动续上」/ ⌥+左键切「拦截模式」/ 拖动挪位置
+-- 纯 hs.canvas 绘制：没有额外进程、没有轮询、只在状态变化时重绘
+--------------------------------------------------------------------------------
+
+local BALL_FILE = CONFIG.outDir .. "/ball.state"
+local ball = {
+  canvas = nil, w = CONFIG.ball.size, h = CONFIG.ball.size,
+  x = nil, y = nil, visible = CONFIG.ball.enabled,
+  flashUntil = 0, flashTimer = nil, drag = nil, moved = false,
+}
+
+local function saveBallState()
+  local f = io.open(BALL_FILE, "w")
+  if not f then return end
+  f:write(string.format("%s,%s,%s", tostring(ball.x or ""), tostring(ball.y or ""),
+                        ball.visible and "1" or "0"))
+  f:close()
+end
+
+local function loadBallState()
+  local f = io.open(BALL_FILE, "r")
+  if not f then return end
+  local s = f:read("*a") or ""
+  f:close()
+  local x, y, vis = s:match("^([^,]*),([^,]*),(%d)")
+  if tonumber(x) and tonumber(y) then ball.x, ball.y = tonumber(x), tonumber(y) end
+  if vis then ball.visible = (vis == "1") end
+end
+
+local function ballDraw()
+  local c = ball.canvas
+  if not c then return end
+  local on = resume and resume.enabled
+  local flash = hs.timer.secondsSinceEpoch() < ball.flashUntil
+
+  local fill
+  if flash then
+    fill = { red = 0.18, green = 0.84, blue = 1.00, alpha = 0.95 }   -- 刚截到文字
+  elseif on then
+    fill = { red = 0.16, green = 0.72, blue = 0.42, alpha = 0.90 }   -- 自动续上：开
+  else
+    fill = { red = 0.42, green = 0.43, blue = 0.47, alpha = 0.70 }   -- 关
+  end
+  local ring = state.intercept
+    and { red = 1.00, green = 0.55, blue = 0.10, alpha = 0.95 }        -- 拦截模式：开
+    or  { white = 1.0, alpha = 0.35 }
+
+  pcall(function()
+    c:replaceElements({
+      -- 注意：不要在这里开 trackMouse*。元素级 + canvas 级两套鼠标事件会让同一次点击
+      -- 被投递两遍，表现为"点一下翻转两次"（实测踩过）。只走 canvas 级。
+      { type = "circle", action = "fill", fillColor = fill,
+        center = { x = "50%", y = "50%" }, radius = "44%" },
+      { type = "circle", action = "stroke", strokeColor = ring, strokeWidth = 2,
+        center = { x = "50%", y = "50%" }, radius = "44%" },
+      { type = "text", text = "续", textAlignment = "center",
+        textSize = math.max(12, math.floor(ball.w * 0.40)),
+        textColor = { white = 1.0, alpha = 0.95 },
+        frame = { x = 0, y = math.floor(ball.h * 0.30), w = ball.w, h = ball.h } },
+    })
+  end)
+end
+
+ballRedraw = ballDraw
+
+ballFlash = function()
+  ball.flashUntil = hs.timer.secondsSinceEpoch() + 0.45
+  ballDraw()
+  if ball.flashTimer then ball.flashTimer:stop() end
+  ball.flashTimer = hs.timer.doAfter(0.45, function() ballDraw() end)
+end
+
+local function ballMouse(canvas, msg)
+  if msg == "mouseDown" then
+    ball.drag = { pos = hs.mouse.absolutePosition(), frame = canvas:frame() }
+    ball.moved = false
+    -- 只在拖动期间打开 move 跟踪，平时不接鼠标移动事件
+    pcall(function() canvas:canvasMouseEvents(true, true, false, true) end)
+  elseif msg == "mouseMove" then
+    if ball.drag then
+      local p = hs.mouse.absolutePosition()
+      local dx, dy = p.x - ball.drag.pos.x, p.y - ball.drag.pos.y
+      if math.abs(dx) + math.abs(dy) > 3 then ball.moved = true end
+      local f = ball.drag.frame
+      pcall(function() canvas:frame({ x = f.x + dx, y = f.y + dy, w = ball.w, h = ball.h }) end)
+    end
+  elseif msg == "mouseUp" then
+    pcall(function() canvas:canvasMouseEvents(true, true, false, false) end)
+    local now = hs.timer.secondsSinceEpoch()
+    local debounce = ball.lastUp and (now - ball.lastUp) < 0.25
+    ball.lastUp = now
+    if ball.drag and not ball.moved and not debounce then
+      -- 点击：⌥+点击 = 切拦截模式；普通点击 = 切自动续上
+      local mods = hs.eventtap.checkKeyboardModifiers() or {}
+      if mods.alt then toggleIntercept() else toggleAutoResume() end
+    elseif ball.drag then
+      local f = canvas:frame()
+      ball.x, ball.y = f.x, f.y
+      saveBallState()
+    end
+    ball.drag = nil
+    ballDraw()
+  end
+  return false
+end
+
+local function ballCreate()
+  if ball.canvas then return end
+  loadBallState()
+  local scr = hs.screen.mainScreen():frame()
+  local x = ball.x or (scr.x + scr.w - ball.w - 24)
+  local y = ball.y or (scr.y + math.floor(scr.h * 0.35))
+  local c = hs.canvas.new({ x = x, y = y, w = ball.w, h = ball.h })
+  c:level(hs.canvas.windowLevels.floating)
+  pcall(function() c:behaviorAsLabels({ "canJoinAllSpaces", "stationary" }) end)
+  c:clickActivating(false)        -- 点它不抢焦点（否则会把你的输入框弄失焦）
+  -- 只接 down/up（拖动时再临时打开 move 跟踪），避免无谓的鼠标移动回调
+  pcall(function() c:canvasMouseEvents(true, true, false, false) end)
+  c:mouseCallback(ballMouse)
+  ball.canvas = c
+  ballDraw()
+  c:show()
+  log("[ball] 悬浮球已创建 " .. ball.w .. "px @ (" .. x .. "," .. y .. ") 显示=" .. tostring(ball.visible))
+end
+
+local function ballApply()
+  if ball.visible then
+    ballCreate()
+    if ball.canvas then ball.canvas:show() end
+  elseif ball.canvas then
+    ball.canvas:hide()
+  end
+  ballDraw()
+  saveBallState()
+end
+
+local function ballToggleVisible()
+  ball.visible = not ball.visible
+  ballApply()
+  log("[ball] 显示 = " .. tostring(ball.visible))
+  notify("Voice Guard", ball.visible and "悬浮球：显示" or "悬浮球：已隐藏（⌥⌘B 唤回）")
 end
 
 --------------------------------------------------------------------------------
@@ -464,6 +619,7 @@ hs.hotkey.bind({ "alt", "cmd" }, "v", snapshotFocused)
 hs.hotkey.bind({ "alt", "cmd" }, "i", toggleIntercept)
 hs.hotkey.bind({ "alt", "cmd" }, "s", toggleAutoResume)                        -- 自动续上开关
 hs.hotkey.bind({ "alt", "cmd" }, "t", function() doResume("手动测试", true) end) -- 手动试一次键位
+hs.hotkey.bind({ "alt", "cmd" }, "b", ballToggleVisible)                       -- 悬浮球显隐
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "d", function() dumpTree("manual") end)
 hs.hotkey.bind({ "alt", "cmd" }, "l", function() hs.open(LOG_FILE) end)
 
@@ -485,6 +641,12 @@ do
       "（" .. resumeName() .. "，模式 " .. CONFIG.autoResume.mode ..
       "，策略 " .. CONFIG.autoResume.strategy ..
       "，延迟 " .. CONFIG.autoResume.delay .. "s；⌥⌘S 开关，⌥⌘T 手动试一次）")
+end
+
+-- 悬浮球
+do
+  local okBall, errBall = pcall(ballApply)
+  if not okBall then log("[ball] 创建失败：" .. tostring(errBall)) end
 end
 
 local okTap, errTap = pcall(startEventTap)
@@ -516,6 +678,9 @@ local mod = {
   toggleAutoResume = toggleAutoResume,
   resumeNow = function() doResume("手动测试", true) end,
   resumeState = resume,
+  ball = ball,
+  ballToggleVisible = ballToggleVisible,
+  ballApply = ballApply,
   state = state,
   timers = timers,
   eventtap = eventtap,
