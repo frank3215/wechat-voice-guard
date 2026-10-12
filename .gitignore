@@ -1,0 +1,4 @@
+.DS_Store
+*.log
+state.json
+ax-tree.txt
