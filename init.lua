@@ -598,40 +598,74 @@ ballFlash = function()
   ball.flashTimer = hs.timer.doAfter(0.45, function() ballDraw() end)
 end
 
+-- 拖拽实现：不依赖 canvas 的 mouseMove 事件（实测根本收不到，导致拖不动）。
+-- 改成按下时起一个 60Hz 的循环，自己读鼠标绝对位置来移动窗口；
+-- 并用 hs.eventtap.checkMouseButtons() 兜底检测"按键已松开但 mouseUp 丢了"的情况。
+local function finishDrag(reason, allowClick)
+  if ball.dragTimer then
+    pcall(function() ball.dragTimer:stop() end)
+    ball.dragTimer = nil
+  end
+  local d = ball.drag
+  ball.drag = nil
+  if not d then return end
+
+  local now = hs.timer.secondsSinceEpoch()
+  local since = ball.lastUp and (now - ball.lastUp) or 999
+  ball.lastUp = now
+  log(string.format("[ball] %s：moved=%s 位移=%.0fpx 耗时=%.1fs 距上次=%.2fs%s",
+      reason, tostring(d.moved), d.dist or 0, now - d.t0, since,
+      (allowClick and not d.moved and since >= 0.6) and " → 判为点击" or ""))
+
+  if allowClick and not d.moved and since >= 0.6 then
+    -- 点击：⌥+点击 = 切拦截模式；普通点击 = 切自动续上
+    local mods = hs.eventtap.checkKeyboardModifiers() or {}
+    if mods.alt then toggleIntercept() else toggleAutoResume() end
+  else
+    if ball.canvas then
+      local f = ball.canvas:frame()
+      if f then ball.x, ball.y = f.x, f.y end
+    end
+    saveBallState()
+  end
+  ballDraw()
+end
+
+local function startDrag(canvas)
+  local p = hs.mouse.absolutePosition()
+  local f = canvas:frame() or { x = 0, y = 0, w = ball.w, h = ball.h }
+  ball.drag = {
+    start = p, t0 = hs.timer.secondsSinceEpoch(), moved = false, dist = 0,
+    offset = { x = p.x - f.x, y = p.y - f.y },   -- 抓取点偏移，拖动时手感自然
+  }
+  if ball.dragTimer then pcall(function() ball.dragTimer:stop() end) end
+  ball.dragTimer = hs.timer.new(1 / 60, function()
+    local d = ball.drag
+    if not d then return end
+    local cur = hs.mouse.absolutePosition()
+    local dx, dy = cur.x - d.start.x, cur.y - d.start.y
+    d.dist = math.abs(dx) + math.abs(dy)
+    if d.dist > 3 then d.moved = true end
+    pcall(function()
+      canvas:frame({ x = cur.x - d.offset.x, y = cur.y - d.offset.y, w = ball.w, h = ball.h })
+    end)
+
+    -- 兜底一：按键全松开了（可能漏掉 mouseUp，比如拖太快甩出球外）
+    local btns = hs.eventtap.checkMouseButtons() or {}
+    local any = false
+    for _, v in pairs(btns) do if v then any = true; break end end
+    if not any then finishDrag("按键已松开（mouseUp 未送达）", false); return end
+    -- 兜底二：拖太久（异常情况），别让它一直黏着鼠标
+    if hs.timer.secondsSinceEpoch() - d.t0 > 30 then finishDrag("拖拽超时", false) end
+  end)
+  ball.dragTimer:start()
+end
+
 local function ballMouse(canvas, msg)
   if msg == "mouseDown" then
-    ball.drag = { pos = hs.mouse.absolutePosition(), frame = canvas:frame() }
-    ball.moved = false
-    -- 只在拖动期间打开 move 跟踪，平时不接鼠标移动事件
-    pcall(function() canvas:canvasMouseEvents(true, true, false, true) end)
-  elseif msg == "mouseMove" then
-    if ball.drag then
-      local p = hs.mouse.absolutePosition()
-      local dx, dy = p.x - ball.drag.pos.x, p.y - ball.drag.pos.y
-      if math.abs(dx) + math.abs(dy) > 3 then ball.moved = true end
-      local f = ball.drag.frame
-      pcall(function() canvas:frame({ x = f.x + dx, y = f.y + dy, w = ball.w, h = ball.h }) end)
-    end
+    startDrag(canvas)
   elseif msg == "mouseUp" then
-    pcall(function() canvas:canvasMouseEvents(true, true, false, false) end)
-    local now = hs.timer.secondsSinceEpoch()
-    local since = ball.lastUp and (now - ball.lastUp) or 999
-    ball.lastUp = now
-    local debounced = since < 0.6
-    -- 把每次 mouseUp 都记下来：曾经出现过"一次点击翻转两次"，靠这行才能定位
-    log(string.format("[ball] mouseUp drag=%s moved=%s 距上次=%.2fs%s",
-        tostring(ball.drag ~= nil), tostring(ball.moved), since, debounced and " → 去抖忽略" or ""))
-    if ball.drag and not ball.moved and not debounced then
-      -- 点击：⌥+点击 = 切拦截模式；普通点击 = 切自动续上
-      local mods = hs.eventtap.checkKeyboardModifiers() or {}
-      if mods.alt then toggleIntercept() else toggleAutoResume() end
-    elseif ball.drag then
-      local f = canvas:frame()
-      ball.x, ball.y = f.x, f.y
-      saveBallState()
-    end
-    ball.drag = nil
-    ballDraw()
+    finishDrag("mouseUp", true)
   end
   return false
 end

@@ -68,6 +68,7 @@ hs = {
   },
   eventtap = {
     checkKeyboardModifiers = function() return {} end,
+    checkMouseButtons = function() return {} end,
     new = function()
       return {
         start = rec("tap.start"),

@@ -126,7 +126,7 @@ cd wechat-voice-guard
 |---|---|
 | 左键单击 | 开关「自动续上」 |
 | `⌥` + 左键单击 | 开关「拦截模式」 |
-| 拖拽 | 挪位置（位置与显隐都存盘，重载后保持） |
+| 按住拖动 | 挪位置（球跟着鼠标走，松开即记住；位置存盘） |
 
 颜色含义：
 
@@ -141,8 +141,13 @@ cd wechat-voice-guard
 点击它**不会抢焦点**（`clickActivating(false)`），所以不会把你的输入框弄失焦。
 
 > 踩坑：canvas 的**元素级** `trackMouseDown/Up` 和 **canvas 级** `canvasMouseEvents` 不能同时开，
-> 否则同一次点击会被投递两遍，表现为「点一下翻转两次」。本仓库只走 canvas 级，
-> 且只在拖动期间临时打开 `move` 跟踪。
+> 否则同一次点击会被投递两遍，表现为「点一下翻转两次」。本仓库只走 canvas 级。
+>
+> 拖拽**不是**靠 canvas 的 `mouseMove` 事件（实测根本收不到，第一版因此拖不动），
+> 而是按下时起一个 60Hz 循环自己读 `hs.mouse.absolutePosition()` 来移动窗口，
+> 并用 `hs.eventtap.checkMouseButtons()` 兜底检测「按键已松开但 mouseUp 丢了」的情况。
+> 每次拖拽都会在 `capture.log` 里留下 `[ball] mouseUp：moved=… 位移=…px 耗时=…s`，
+> 拖不动时看这行就知道是事件没到还是判定错了。
 
 ## 自检
 
