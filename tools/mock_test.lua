@@ -44,9 +44,15 @@ hs = {
     },
   },
   eventtap = {
-    new = function() return { start = rec("tap.start"), stop = rec("tap.stop") } end,
+    new = function()
+      return {
+        start = rec("tap.start"),
+        stop = rec("tap.stop"),
+        isEnabled = function() return true end,
+      }
+    end,
     event = {
-      types = { keyDown = 10 },
+      types = { keyDown = 10, tapDisabledByTimeout = -2, tapDisabledByUserInput = -1 },
       properties = { eventSourceUnixProcessID = 1 },
     },
   },
@@ -68,19 +74,21 @@ end
 
 print("SYNTAX + LOAD OK")
 
--- 顶层返回值检查
-for _, k in ipairs({ "dump", "poll", "snapshot", "toggle", "refresh", "state" }) do
+-- 顶层返回值检查（v2 的导出面）
+for _, k in ipairs({ "dump", "pollPasteboard", "refreshPIDs", "snapshot", "toggle", "state", "counters" }) do
   if mod[k] == nil then print("MISSING EXPORT: " .. k); os.exit(1) end
 end
 print("EXPORTS OK")
 
--- 冒烟：调用不依赖真实 AX 的函数
-local ok2, err2 = pcall(mod.poll)
-print("poll(): " .. (ok2 and "OK" or ("ERROR " .. tostring(err2))))
+-- 冒烟：调用不依赖真实 AX/权限的函数
+local ok2, err2 = pcall(mod.pollPasteboard)
+print("pollPasteboard(): " .. (ok2 and "OK" or ("ERROR " .. tostring(err2))))
 local ok3, err3 = pcall(mod.toggle)
 print("toggle(): " .. (ok3 and "OK" or ("ERROR " .. tostring(err3))))
-local ok4, err4 = pcall(mod.dump)
-print("dump(): " .. (ok4 and "OK" or ("ERROR " .. tostring(err4))))
+local ok4, err4 = pcall(mod.refreshPIDs)
+print("refreshPIDs(): " .. (ok4 and "OK" or ("ERROR " .. tostring(err4))))
+local c = mod.counters()
+print(string.format("counters: key=%s wx=%s tapDisabled=%s", tostring(c.key), tostring(c.wx), tostring(c.tapDisabled)))
 
 print("HOTKEYS BOUND: " .. tostring(#calls))
 os.exit((ok2 and ok3 and ok4) and 0 or 1)
