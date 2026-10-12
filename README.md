@@ -62,6 +62,11 @@ cd wechat-voice-guard
 > 实测**不需要**「输入监控」权限——有辅助功能权限，`CGEventTap` 就能收到键盘事件。
 > 验证方式见下面的自检（`键盘事件>0` 即为生效）。
 
+> 改完 `init.lua` 建议先跑 `./tools/run_mock.sh`。它**只检查 Lua 语法与顶层加载**，
+> 测不到任何真实行为（没有 macOS、没有微信、没有钩子）；它的唯一价值是别把语法坏掉的配置
+> `deploy` 出去——那会让 Hammerspoon 静默变成什么都不做的空壳。
+> 仓库里的 `lint` workflow 跑的就是它（Linux runner 上装 `lua5.4`），所以那个徽章只是语法自检，不是功能测试。
+
 ## 热键
 
 | 热键 | 作用 |
@@ -128,8 +133,8 @@ grep -E "\[hb\]|\[tap\]|\[pb\]" ~/Library/Logs/WeChatVoiceGuard/capture.log
 |---|---|
 | `init.lua` | Hammerspoon 配置（唯一源码） |
 | `deploy.sh` | 部署 + 重启 Hammerspoon + 打印状态 |
-| `tools/mock_test.lua` | 用假 `hs` API 加载配置，抓语法/顶层错误（不需要 macOS 权限，可在 CI 跑） |
-| `tools/run_mock.sh` | 上面那个的包装（把 `HOME` 指向临时目录，避免污染真实日志） |
+| `tools/mock_test.lua` | 用假 `hs` API 加载配置，抓语法错误与顶层运行时错误 |
+| `tools/run_mock.sh` | 上面那个的包装（解析 lua 路径、把 `HOME` 指向临时目录，避免污染真实日志） |
 
 运行时产物（不在仓库内）：
 
