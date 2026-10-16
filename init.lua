@@ -598,6 +598,9 @@ ballFlash = function()
   ball.flashTimer = hs.timer.doAfter(0.45, function() ballDraw() end)
 end
 
+-- 前向声明：ballMouse 要用到，但菜单那一节在后面才定义
+local showBallMenu
+
 -- 拖拽实现：不依赖 canvas 的 mouseMove 事件（实测根本收不到，导致拖不动）。
 -- 改成按下时起一个 60Hz 的循环，自己读鼠标绝对位置来移动窗口；
 -- 并用 hs.eventtap.checkMouseButtons() 兜底检测"按键已松开但 mouseUp 丢了"的情况。
@@ -663,8 +666,23 @@ end
 
 local function ballMouse(canvas, msg)
   if msg == "mouseDown" then
+    -- canvas 不区分左右键，必须自己问：right 是 checkMouseButtons 提供的哈希键
+    local btns = hs.eventtap.checkMouseButtons() or {}
+    if btns.right then
+      ball.rightClick = true
+      ball.drag = nil
+      if ball.dragTimer then pcall(function() ball.dragTimer:stop() end); ball.dragTimer = nil end
+      return false
+    end
+    ball.rightClick = nil
     startDrag(canvas)
   elseif msg == "mouseUp" then
+    if ball.rightClick then
+      ball.rightClick = nil
+      -- 不要在鼠标回调里做菜单跟踪，延后一拍
+      hs.timer.doAfter(0, function() pcall(showBallMenu) end)
+      return false
+    end
     finishDrag("mouseUp", true)
   end
   return false
@@ -710,6 +728,67 @@ local function ballToggleVisible()
 end
 
 --------------------------------------------------------------------------------
+-- 悬浮球右键菜单
+--
+-- 用原生 NSMenu 而不是自己在 canvas 上画菜单：hs.menubar.new(false) 建一个不在
+-- 菜单栏里显示的对象，再用 popupMenu(point) 在指定坐标弹出——勾选态、分隔线、
+-- 键盘导航都是系统给的。（canvas 的鼠标事件不区分左右键，所以右键靠
+-- hs.eventtap.checkMouseButtons() 的 right 哈希键判断。）
+--------------------------------------------------------------------------------
+
+local ballMenu = nil
+
+local function quitService()
+  log("[menu] 从悬浮球菜单退出服务")
+  notify("Voice Guard", "正在退出服务…")
+  local pid = hs.processInfo and hs.processInfo.processID
+  local app = hs.application.get("Hammerspoon") or (pid and hs.application.get(pid))
+  if app then
+    hs.timer.doAfter(0.3, function() app:kill() end)   -- 让通知先出去
+  else
+    hs.timer.doAfter(0.3, function() os.exit(0) end)   -- 兜底
+  end
+end
+
+local function buildBallMenu()
+  if not ballMenu then
+    ballMenu = hs.menubar.new(false)     -- false = 不占用系统菜单栏
+  end
+  if not ballMenu then return nil end
+  ballMenu:setMenu({
+    { title = "自动续上", checked = (resume and resume.enabled) or false, fn = toggleAutoResume },
+    { title = "拦截模式", checked = state.intercept, fn = toggleIntercept },
+    { title = "-" },
+    { title = "打开捕获日志", fn = function() hs.open(LOG_FILE) end },
+    { title = "打开抢救箱", fn = function() hs.open(CONFIG.outDir .. "/clipboard-rescue") end },
+    { title = "-" },
+    { title = "隐藏悬浮球（⌥⌘B 唤回）", fn = ballToggleVisible },
+    { title = "退出服务（停止 Hammerspoon）", fn = quitService },
+  })
+  return ballMenu
+end
+
+-- 注意：这里不能写 local，否则 ballMouse 里引用的是那个前向声明的空值
+function showBallMenu()
+  local m = buildBallMenu()
+  if not m then
+    log("[menu] 无法创建菜单对象")
+    return
+  end
+  -- 菜单位置：鼠标当前所在的屏幕坐标
+  local pt = hs.mouse.absolutePosition()
+  local ok, err = pcall(function() m:popupMenu(pt) end)
+  if not ok then
+    -- 某些版本只接受 hs.geometry 点表，或者干脆无参
+    ok = pcall(function() m:popupMenu(hs.geometry.point(pt.x, pt.y)) end)
+    if not ok then
+      log("[menu] popupMenu(point) 失败：" .. tostring(err) .. "，退回无参形式")
+      pcall(function() m:popupMenu() end)
+    end
+  end
+end
+
+--------------------------------------------------------------------------------
 -- 启动
 --------------------------------------------------------------------------------
 
@@ -740,6 +819,13 @@ do
       "（" .. resumeName() .. "，模式 " .. CONFIG.autoResume.mode ..
       "，策略 " .. CONFIG.autoResume.strategy ..
       "，延迟 " .. CONFIG.autoResume.delay .. "s；⌥⌘S 开关，⌥⌘T 手动试一次）")
+end
+
+-- 右键菜单：先构建一次验证通路（不弹出），弹出只在右键时发生
+do
+  local okM, m = pcall(buildBallMenu)
+  if okM and m then log("[menu] 右键菜单已就绪（自动续上 / 拦截模式 / 日志 / 抢救箱 / 隐藏球 / 退出服务）")
+  else log("[menu] 构建失败：" .. tostring(m)) end
 end
 
 -- 悬浮球：必须先读盘再判断显隐，否则"上次隐藏了"会被无视

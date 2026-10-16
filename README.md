@@ -145,6 +145,7 @@ cd wechat-voice-guard
 | 操作 | 作用 |
 |---|---|
 | 左键单击 | 开关「自动续上」 |
+| **右键单击** | 弹出原生菜单：自动续上 / 拦截模式 / 打开日志 / 打开抢救箱 / 隐藏悬浮球 / **退出服务** |
 | `⌥` + 左键单击 | 开关「拦截模式」 |
 | 按住拖动 | 挪位置（球跟着鼠标走，松开即记住；位置存盘） |
 
@@ -160,6 +161,11 @@ cd wechat-voice-guard
 实现说明：用 `hs.canvas` **原生绘制**——不起额外进程、不做任何轮询，只在状态变化时重绘。
 点击它**不会抢焦点**（`clickActivating(false)`），所以不会把你的输入框弄失焦。
 
+> 右键菜单用的是 `hs.menubar.new(false)` + `:popupMenu(point)`——**原生 NSMenu**，
+> 勾选态/分隔线/键盘导航都由系统提供，定位到鼠标坐标。
+> canvas 的鼠标事件**不区分左右键**（官方文档明说），所以右键靠
+> `hs.eventtap.checkMouseButtons()` 返回的 `right` 哈希键判断。
+>
 > 踩坑：canvas 的**元素级** `trackMouseDown/Up` 和 **canvas 级** `canvasMouseEvents` 不能同时开，
 > 否则同一次点击会被投递两遍，表现为「点一下翻转两次」。本仓库只走 canvas 级。
 >

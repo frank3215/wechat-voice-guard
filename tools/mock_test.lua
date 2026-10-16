@@ -52,6 +52,17 @@ hs = {
       new = function() return { start = function() end, stop = function() end } end,
     },
   },
+  menubar = {
+    new = function()
+      local m = {}
+      m.setMenu = function() return m end
+      m.popupMenu = function() return m end
+      m.delete = function() end
+      return m
+    end,
+  },
+  geometry = { point = function(x, y) return { x = x, y = y } end },
+  processInfo = { processID = 4242 },
   hotkey = { bind = function(...) calls[#calls + 1] = "hotkey.bind"; return true end },
   open = function() return true end,
   axuielement = {
