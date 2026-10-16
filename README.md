@@ -215,6 +215,7 @@ cd wechat-voice-guard
 | `wxguard restart` | 无条件重载配置并重启 |
 | `wxguard log [-f]` | 看日志 / 持续跟踪 |
 | `wxguard rescue` | 列出抢救箱（救回的语音正文） |
+| `wxguard ball on\|off` | 显示/隐藏悬浮球（也可随时按 `⌥⌘B` 即时开合，无需重启） |
 | `wxguard install` / `uninstall` | 装 / 卸 PATH 软链 |
 
 Dock 应用只是 `wxguard start` 的一层外壳，两边逻辑同源（构建时把脚本拷进 .app 包内）。

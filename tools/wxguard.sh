@@ -8,11 +8,13 @@
 #   wxguard status     状态：进程 / 开关 / 悬浮球 / 最近日志
 #   wxguard log [-f]   看日志（-f 持续跟踪）
 #   wxguard rescue     打开抢救箱（救回的语音文本）
+#   wxguard ball on|off 显示/隐藏悬浮球（也可随时按 ⌥⌘B 即时开合）
 #   wxguard install    把自己软链到 PATH（默认 ~/.local/bin）
 #   wxguard uninstall  删除该软链
 #
-# Dock 上的「WeChat Voice Guard.app」只是本脚本 start 的一层薄壳，
-# 所以两边逻辑永远一致，改这里就够了。
+# Dock 上的「WeChat Voice Guard.app」用的是同一份脚本（构建时拷进应用包内，
+# 因为 macOS 不允许 GUI 应用执行 ~/Downloads 里的文件），改完仓库后重跑
+# tools/build_app.sh 即可同步。
 set -uo pipefail
 
 # ── 解析自身路径（可能是软链，必须跟着跳）─────────────────────────────────
@@ -124,7 +126,7 @@ cmd_status() {
   [ -f "$LOG/autoresume.state" ] && { [ "$(cat "$LOG/autoresume.state")" = "1" ] && ar="开" || ar="关"; }
   if [ -f "$LOG/ball.state" ]; then
     case "$(cut -d, -f3 "$LOG/ball.state" 2>/dev/null)" in
-      1) ball="显示" ;; 0) ball="隐藏" ;; *) ball="未知" ;;
+      1) ball="显示" ;; 0) ball="隐藏（⌥⌘B 或 wxguard ball on）" ;; *) ball="未知" ;;
     esac
   fi
   echo "  自动续上  : $ar   悬浮球: $ball   拦截模式: 见 capture.log 里最近的 [mode]"
@@ -152,6 +154,29 @@ cmd_rescue() {
   ls -lt "$d" | sed 's/^/  /'
   echo
   echo "用 open \"$d\" 在访达里打开"
+}
+
+cmd_ball() {
+  local action="${1:-status}" f="$LOG/ball.state" vis="?"
+  [ -f "$f" ] && vis="$(cut -d, -f3 "$f" 2>/dev/null)"
+  case "$action" in
+    status)
+      if [ "$vis" = "1" ]; then echo "悬浮球：显示"; else echo "悬浮球：隐藏（wxguard ball on 或 ⌥⌘B 唤回）"; fi
+      ;;
+    on|off)
+      local want=1 x=1344 y=413
+      [ "$action" = "off" ] && want=0
+      if [ -f "$f" ]; then
+        x="$(cut -d, -f1 "$f")"; y="$(cut -d, -f2 "$f")"
+      fi
+      echo "$x,$y,$want" > "$f"
+      echo "已写入悬浮球状态（$([ "$want" = 1 ] && echo 显示 || echo 隐藏)），重启使其生效…"
+      cmd_restart >/dev/null 2>&1
+      cmd_status
+      echo "提示：⌥⌘B 可即时开合，不必重启。"
+      ;;
+    *) echo "用法：wxguard ball [on|off|status]" >&2; exit 2 ;;
+  esac
 }
 
 cmd_install() {
@@ -187,9 +212,11 @@ case "${1:-status}" in
   status)    shift; cmd_status "$@" ;;
   log)       shift; cmd_log "$@" ;;
   rescue)    shift; cmd_rescue "$@" ;;
+  ball)      shift; cmd_ball "$@" ;;
   install)   shift; cmd_install "$@" ;;
   uninstall) shift; cmd_uninstall "$@" ;;
   -h|--help|help)
-    sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+    # 打印文件头部的注释块，遇到第一行非注释即停（别用死行号，改注释就会错位）
+    awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "${BASH_SOURCE[0]}" ;;
   *) echo "未知子命令：$1（试试 wxguard help）" >&2; exit 2 ;;
 esac
