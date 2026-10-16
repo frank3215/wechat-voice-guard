@@ -798,6 +798,7 @@ hs.hotkey.bind({ "alt", "cmd" }, "i", toggleIntercept)
 hs.hotkey.bind({ "alt", "cmd" }, "s", toggleAutoResume)                        -- 自动续上开关
 hs.hotkey.bind({ "alt", "cmd" }, "t", function() doResume("手动测试", true) end) -- 手动试一次键位
 hs.hotkey.bind({ "alt", "cmd" }, "b", ballToggleVisible)                       -- 悬浮球显隐
+hs.hotkey.bind({ "alt", "cmd" }, "m", function() pcall(showBallMenu) end)      -- 保底：在鼠标处弹同一菜单
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "d", function() dumpTree("manual") end)
 hs.hotkey.bind({ "alt", "cmd" }, "l", function() hs.open(LOG_FILE) end)
 
