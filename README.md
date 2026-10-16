@@ -182,6 +182,25 @@ cd wechat-voice-guard
 
 这些结论都是在真微信 + 真实键盘输入上跑出来的，不是"理论上可行"。
 
+## 钉到 Dock / Launchpad 的一键启动图标
+
+```bash
+./tools/build_app.sh --pin-dock
+```
+
+- 构建一个真正的 `.app`（`~/Applications/WeChat Voice Guard.app`）：**双击 = 部署最新配置 + 启动 Hammerspoon**
+- 配置与已部署的一致时，双击只是「确保在运行」；有变化才重启（避免每次双击都清掉内存里的历史）
+- 图标由 `tools/make_icon.swift` 用 Swift **现画**（绿色渐变圆角 + 白「续」，与悬浮球同一套视觉），
+  可从源码一键重建，仓库不依赖任何设计素材
+- `--pin-dock` 会写 `com.apple.dock persistent-apps` 并重启 Dock；不加参数则只构建
+- 卸载：把图标从 Dock 拖走，再 `rm -rf "~/Applications/WeChat Voice Guard.app"`
+
+> **两个必须知道的坑**
+> 1. `.app` 建好后必须 `lsregister -f` **注册到 LaunchServices**。未注册时 `open` 会**返回 0 却什么都不做**
+>    ——脚本不跑、日志里毫无痕迹，是最难查的那种"假成功"。`build_app.sh` 已自动注册。
+> 2. shell 脚本里**变量后紧跟中文标点**要写成 `${NAME}`，否则 bash 会把标点当作变量名的一部分，
+>    在 `set -u` 下直接 `unbound variable` 报错。
+
 ## 自检
 
 ```bash
