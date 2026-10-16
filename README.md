@@ -188,7 +188,7 @@ cd wechat-voice-guard
 ./tools/build_app.sh --pin-dock
 ```
 
-- 构建一个真正的 `.app`（`~/Applications/WeChat Voice Guard.app`）：**双击 = 部署最新配置 + 启动 Hammerspoon**
+- 构建一个真正的 `.app`（`~/Applications/WeChat Voice Guard.app`）：**双击 = 启动 Hammerspoon**（若能读到仓库，顺带同步最新配置）
 - 配置与已部署的一致时，双击只是「确保在运行」；有变化才重启（避免每次双击都清掉内存里的历史）
 - 图标由 `tools/make_icon.swift` 用 Swift **现画**（绿色渐变圆角 + 白「续」，与悬浮球同一套视觉），
   可从源码一键重建，仓库不依赖任何设计素材
@@ -200,6 +200,34 @@ cd wechat-voice-guard
 >    ——脚本不跑、日志里毫无痕迹，是最难查的那种"假成功"。`build_app.sh` 已自动注册。
 > 2. shell 脚本里**变量后紧跟中文标点**要写成 `${NAME}`，否则 bash 会把标点当作变量名的一部分，
 >    在 `set -u` 下直接 `unbound variable` 报错。
+
+## 命令行：`wxguard`
+
+```bash
+./tools/wxguard.sh install     # 软链到 ~/.local/bin/wxguard（该目录已在你 ~/.zshrc 的 PATH 里）
+```
+
+| 命令 | 作用 |
+|---|---|
+| `wxguard` / `wxguard status` | 进程 / 自动续上 / 悬浮球 / 最近日志一览 |
+| `wxguard start` | 部署最新配置（有变化才重启）并启动 |
+| `wxguard stop` | 停止（捕获、自动续上、悬浮球一起停） |
+| `wxguard restart` | 无条件重载配置并重启 |
+| `wxguard log [-f]` | 看日志 / 持续跟踪 |
+| `wxguard rescue` | 列出抢救箱（救回的语音正文） |
+| `wxguard install` / `uninstall` | 装 / 卸 PATH 软链 |
+
+Dock 应用只是 `wxguard start` 的一层外壳，两边逻辑同源（构建时把脚本拷进 .app 包内）。
+
+> **为什么脚本必须拷进 .app 包内**
+> macOS 不允许 GUI 启动的应用执行 `~/Downloads` 里的文件，报
+> `Operation not permitted`、退出码 **126**（实测）。所以 .app 自带一份 `Resources/wxguard.sh`，
+> 仓库路径通过环境变量 `WXG_REPO` 传入，**只用于"读最新配置"这类可选动作，读不到就跳过**。
+>
+> 后果：改了 `init.lua` 后要么重跑 `./tools/build_app.sh`，要么在终端 `wxguard restart`
+> （终端有 Downloads 权限，能直接读仓库）。
+>
+> 同理，**.app 的操作步骤必须幂等**：`cp`/`cmp` 都做了失败即跳过的处理，否则 GUI 环境下会直接报错退出。
 
 ## 自检
 

@@ -49,50 +49,21 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-cat > "$APP/Contents/MacOS/launch" <<LAUNCH
+# 把 CLI 打进应用包内：macOS 不允许 GUI 启动的应用执行 ~/Downloads 里的文件
+# （实测报 "Operation not permitted"、退出码 126），放包内才稳。
+cp "$REPO/tools/wxguard.sh" "$APP/Contents/Resources/wxguard.sh" || exit 1
+chmod 755 "$APP/Contents/Resources/wxguard.sh"
+
+cat > "$APP/Contents/MacOS/launch" <<'LAUNCH'
 #!/bin/bash
-# $NAME 启动器（双击 / Dock 点击）
-# 由 tools/build_app.sh 生成，仓库路径在构建时写入。
-set -uo pipefail
-REPO="$REPO"
-LOG="\$HOME/Library/Logs/WeChatVoiceGuard"
-STAMP="\$(date '+%Y-%m-%d %H:%M:%S')"
-
-mkdir -p "\$HOME/.hammerspoon" "\$LOG"
-
-HS="\$HOME/Applications/Hammerspoon.app"
-[ -d "\$HS" ] || HS="/Applications/Hammerspoon.app"
-if [ ! -d "\$HS" ]; then
-  osascript -e 'display dialog "找不到 Hammerspoon.app。\\n\\n请先在终端执行：\\nbrew install --cask hammerspoon --appdir=\$HOME/Applications" buttons {"好"} default button 1 with icon caution' >/dev/null 2>&1
-  echo -e "\$STAMP\t[launcher] 失败：找不到 Hammerspoon.app" >> "\$LOG/capture.log"
-  exit 1
-fi
-
-# 仓库是唯一源码：配置变了就重新部署
-DEPLOYED="\$HOME/.hammerspoon/init.lua"
-CHANGED=1
-if [ -f "\$REPO/init.lua" ] && [ -f "\$DEPLOYED" ] && cmp -s "\$REPO/init.lua" "\$DEPLOYED"; then CHANGED=0; fi
-if [ "\$CHANGED" = "1" ] && [ -f "\$REPO/init.lua" ]; then
-  cp "\$REPO/init.lua" "\$DEPLOYED"
-fi
-
-EXEC="\$HS/Contents/MacOS/Hammerspoon"
-PID="\$(pgrep -f "\$EXEC" || true)"
-if [ -n "\$PID" ]; then
-  if [ "\$CHANGED" = "1" ]; then
-    kill "\$PID" 2>/dev/null
-    for _ in \$(seq 1 20); do sleep 0.3; pgrep -f "\$EXEC" >/dev/null || break; done
-    open -a "\$HS"
-    echo -e "\$STAMP\t[launcher] 双击启动：配置有更新，已重启" >> "\$LOG/capture.log"
-  else
-    echo -e "\$STAMP\t[launcher] 双击：已在运行，配置无变化" >> "\$LOG/capture.log"
-  fi
-else
-  open -a "\$HS"
-  echo -e "\$STAMP\t[launcher] 双击启动：已拉起 Hammerspoon" >> "\$LOG/capture.log"
-fi
-exit 0
+# WeChat Voice Guard 启动器（双击 / Dock 点击）
+# 真正逻辑是包内那份 wxguard.sh（与仓库同源，构建时拷贝），改仓库后需重新构建本应用。
+BUNDLE="$(cd "$(dirname "$0")/.." && pwd)"
+export WXG_REPO="@@REPO@@"
+exec "$BUNDLE/Resources/wxguard.sh" start
 LAUNCH
+# 引号 heredoc 不会展开变量，仓库路径用占位符替换进去
+sed -i '' "s|@@REPO@@|$REPO|" "$APP/Contents/MacOS/launch"
 
 chmod 755 "$APP/Contents/MacOS/launch"
 touch "$APP"                      # 让 Finder/Dock 刷新图标缓存
@@ -107,7 +78,9 @@ fi
 
 # ── 3) 钉到 Dock ───────────────────────────────────────────────────────────
 if [ "$PIN" = "1" ]; then
-  if defaults read com.apple.dock persistent-apps 2>/dev/null | grep -qF "$APP"; then
+  # 注意：Dock 里存的是**百分号编码**的 file:// URL（WeChat%20Voice%20Guard），
+  # 拿未编码的路径 grep 永远匹配不上 —— 实测因此钉进去三份重复条目。必须按编码后的串比对。
+  if defaults read com.apple.dock persistent-apps 2>/dev/null | grep -qF "WeChat%20Voice%20Guard"; then
     echo "Dock 里已经有它了，跳过"
   else
     defaults write com.apple.dock persistent-apps -array-add \
